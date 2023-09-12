@@ -52,6 +52,8 @@ sudo systemctl enable arm64Runner.service
 
 ```
 
+**Note** The above arm64Runner.service is already created through pulumi.
+
 The self-hosted runner is up and ready to process the jobs.
 
 ## Log File
