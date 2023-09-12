@@ -1,0 +1,3 @@
+name: self-hosted-arm64-runner
+runtime: nodejs
+description: A minimal AWS TypeScript Pulumi program
