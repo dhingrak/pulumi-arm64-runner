@@ -1,47 +1,56 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import * as tls from "@pulumi/tls";
 import * as fs from "fs"
 
 
-const pulumiConfig = new pulumi.Config();
+const config = new pulumi.Config();
+const instanceType = config.require("instanceType")
+const diskSize = config.require("diskSize")
+const volumeType = config.require("volumeType")
 
-// Create a VPC.
+
+const awsInstanceTypeMapping = new Map([
+    ["t4g", aws.ec2.InstanceType.T4g_Medium],
+    ["c6g", aws.ec2.InstanceType.C6g_Large],
+    ["m6g", aws.ec2.InstanceType.M6g_Large],
+    ["m6gd", aws.ec2.InstanceType.M6gd_Large]
+]);
+
+
 const vpc = new aws.ec2.Vpc("vpc", {
     cidrBlock: "10.0.0.0/16",
 });
 
 // Create an an internet gateway.
-const gateway = new aws.ec2.InternetGateway("gateway", {
-    vpcId: vpc.id,
-});
+// const gateway = new aws.ec2.InternetGateway("gateway", {
+//     vpcId: vpc.id,
+// });
 
-// Create a subnet that automatically assigns new instances a public IP address.
+
 const subnet = new aws.ec2.Subnet("subnet", {
     vpcId: vpc.id,
     cidrBlock: "10.0.1.0/24",
-    mapPublicIpOnLaunch: true,
+   // mapPublicIpOnLaunch: true,
 });
 
 // Create a route table.
 const routes = new aws.ec2.RouteTable("routes", {
     vpcId: vpc.id,
-    routes: [
-        {
-            cidrBlock: "0.0.0.0/0",
-            gatewayId: gateway.id,
-        },
-    ],
+    // routes: [
+    //     {
+    //         cidrBlock: "0.0.0.0/0",
+    //         gatewayId: gateway.id,
+    //     },
+    // ],
 });
 
-// Associate the route table with the public subnet.
+
 const routeTableAssociation = new aws.ec2.RouteTableAssociation("route-table-association", {
     subnetId: subnet.id,
     routeTableId: routes.id,
 });
 
-// Create a security group allowing inbound access over port 22 and outbound
-// access to anywhere.
+
 const securityGroup = new aws.ec2.SecurityGroup("security-group", {
     vpcId: vpc.id,
     ingress: [
@@ -72,46 +81,52 @@ const ami = pulumi.output(aws.ec2.getAmi({
 }));
 
 
-let keyPair = getOrGenerateKeyPair("cluster");
-let keyName = keyPair[0];
 let userData = fs.readFileSync("postDeploy.sh").toString();
+let instanceProfile = createNodeInstanceProfile();
 
-function generatePrivateKey(name:string) : tls.PrivateKey{
-	let args : tls.PrivateKeyArgs = {
-		algorithm: "RSA",
-		rsaBits: 2048
-	}
-	return new tls.PrivateKey(`EventStoreDB-${name}-private-key`, args);
+
+function createNodeInstanceProfile() {
+	let role = new aws.iam.Role("EventStoreDB", {
+		path: "/",
+		managedPolicyArns: [
+			'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore',
+			'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+		],
+		assumeRolePolicy: `{
+			"Version": "2012-10-17",
+			"Statement": [
+				{
+					"Action": "sts:AssumeRole",
+					"Principal": {
+					"Service": "ec2.amazonaws.com"
+					},
+					"Effect": "Allow",
+					"Sid": ""
+				}
+			]
+		}`,
+	});
+	
+	return new aws.iam.InstanceProfile("EventStoreDB", {role: role.name});
 }
 
-function generateKeyPair(name:string) : [pulumi.Output<string>, pulumi.Output<string>]{
-	let privateKey = generatePrivateKey(name);
-	let args : aws.ec2.KeyPairArgs = {
-		publicKey: privateKey.publicKeyOpenssh
-	};
-	let keyPair = new aws.ec2.KeyPair(`EventStoreDB-${name}-key-pair`, args);
-	return [keyPair.keyName, privateKey.privateKeyPem];
+if (!awsInstanceTypeMapping.has(instanceType)) {
+    throw new Error(`Unsupported instance type: ${instanceType}. Currently we only supports t4g, c6g, m6g, m6gd`)
 }
 
-function getOrGenerateKeyPair(name:string) : [pulumi.Output<string>, pulumi.Output<string>]{
-	let keyName : pulumi.Output<string>;
-	let privateKeyPem : pulumi.Output<string>;
-
-	if(!pulumiConfig.get("keyName")){
-		let keyPair = generateKeyPair(name);
-		keyName = keyPair[0];
-		privateKeyPem = keyPair[1];
-	} else{
-		keyName = pulumi.output(pulumiConfig.require("keyName"));
-		privateKeyPem = pulumiConfig.requireSecret("privateKey");
-	}
-	return [keyName, privateKeyPem];
+if (volumeType != "gp3" && volumeType != "gp2") {
+    throw new Error(`Unsupported volume type : ${volumeType}`)
 }
 
-// Create and launch an Amazon Ubuntu EC2 instance into the public subnet.
+if (parseInt(diskSize) < 10 || parseInt(diskSize) > 100 ) {
+    throw new Error(`Disk size must be between 10 and 100`)
+}
+
+// Create and launch an Amazon Ubuntu EC2 instance
 const instance = new aws.ec2.Instance("instance", {
     ami: ami.id,
-    instanceType: "t4g.medium",
+    instanceType: awsInstanceTypeMapping.get(instanceType),
+    iamInstanceProfile: instanceProfile,
     subnetId: subnet.id,
     vpcSecurityGroupIds: [
         securityGroup.id,
@@ -119,15 +134,20 @@ const instance = new aws.ec2.Instance("instance", {
     ebsBlockDevices: [
         {
             deviceName: "/dev/sda1",
-            volumeType: "gp2",
-            volumeSize: 30,
+            volumeType: volumeType,
+            volumeSize: parseInt(diskSize),
         }
     ],
-    keyName: keyName,
-    userData: userData
+    userData: userData,
+    tags: {
+        Name: "Linux-ARM64-Runner"
+    }
 });
 
 // Export the instance's publicly accessible URL.
 module.exports = {
-    instanceURL: pulumi.interpolate `http://${instance.publicIp}`,
+    instanceURL: pulumi.interpolate `http://${instance.privateIp}`,
+    instanceType: awsInstanceTypeMapping.get(instanceType),
+    diskSize: pulumi.interpolate `${diskSize}GB`,
+    volumeType: volumeType
 };

@@ -1,3 +1,6 @@
 encryptionsalt: v1:qQxA4RsJ2GA=:v1:BybP6CSVwrqKoWky:FzA6G0lCK4Pjudp7r7ErDX8/uK6KrA==
 config:
   aws:region: us-west-2
+  self-hosted-arm64-runner:diskSize: "30"
+  self-hosted-arm64-runner:instanceType: t4g
+  self-hosted-arm64-runner:volumeType: gp3
