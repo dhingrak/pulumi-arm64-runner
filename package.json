@@ -6,8 +6,8 @@
     },
     "dependencies": {
         "@pulumi/pulumi": "^3.123.0",
-        "@pulumi/aws": "^5.0.0",
-        "@pulumi/awsx": "^1.0.0",
+        "@pulumi/aws": "^6.18.1",
+        "@pulumi/awsx": "^2.20.0",
         "@pulumi/tls": "^4.9.0"
     }
 }
